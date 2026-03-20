@@ -1,0 +1,150 @@
+//
+// Created by 57500 on 2026/3/2.
+//
+
+#include "NewBee.h"
+
+#include <cstdio>
+#include <cstring>
+
+#include "can.h"
+#include "usart.h"
+
+NewBee::NewBee()
+    : motor1(1), motor2(2), motor3(3), motor4(4), motor5(5), motor6(6)
+{
+
+}
+
+void NewBee::Clear()
+{
+    ik.Clear();
+    state.Clear();
+    tp.Clear();
+}
+
+void NewBee::UpDate()
+{
+    UpDate_Current_Angle_Rad();
+    ik.Solve_FinalTheta(tp.CP_Ref[tp.Count],state.Current_Angle_Rad,state.Next_Best_Angle_Rad,
+        state.Current_Angle_Rad[3]);
+    tp.Control_Once(state.Current_Angle_Rad,state.Next_Best_Angle_Rad);
+    Control_All_Motor(tp.JointRPM);
+}
+
+void NewBee::Control_All_Motor(const float* rpm)
+{
+    motor1.Motor_VelControl(rpm[0],0,0);
+    motor2.Motor_VelControl(rpm[1],0,0);
+    motor3.Motor_VelControl(rpm[2],0,0);
+    motor4.Motor_VelControl(rpm[3],0,0);
+    motor5.Motor_VelControl(rpm[4],0,0);
+    motor6.Motor_VelControl(rpm[5],0,0);
+}
+
+void NewBee::Emergency_Stop(void)
+{
+    tp.Clear();
+
+    motor1.Motor_VelControl(0,0,0);
+    motor2.Motor_VelControl(0,0,0);
+    motor3.Motor_VelControl(0,0,0);
+    motor4.Motor_VelControl(0,0,0);
+    motor5.Motor_VelControl(0,0,0);
+    motor6.Motor_VelControl(0,0,0);
+}
+
+void NewBee::UpDate_Current_Angle_Rad(void)
+{
+    //并行通讯
+    for (int i=0; i<6; i++)
+    {
+        uint32_t wait_start = HAL_GetTick();
+        while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) == 0)
+        {
+            if (HAL_GetTick() - wait_start > 2)break;
+        }
+        MotorControl::Read_Motor_Pos(i+1);
+    }
+
+    uint32_t start_tick = HAL_GetTick();
+    while (!(can1.rx_flag[0] && can1.rx_flag[1] && can1.rx_flag[2] &&
+         can1.rx_flag[3] && can1.rx_flag[4]))
+    {
+
+        if (HAL_GetTick() - start_tick > 6) break;
+    }
+
+    for (int i=0; i<6; i++)
+    {
+        state.Current_Angle_Rad[i]=can1.current_angle[i];
+        can1.rx_flag[i] = 0;
+    }
+
+
+    ////串行通讯
+    // for (int i = 0; i < 6; i++)
+    // {
+    //     MotorControl::Read_Motor_Pos(i);
+    //     uint32_t start_tick = HAL_GetTick();
+    //     while (can1.rx_flag!=1)
+    //     {
+    //         if (HAL_GetTick()-start_tick > 5)break;
+    //     }
+    //
+    //     uint16_t Pos=can1.rx_buf[3]<<24|can1.rx_buf[4]<<16|can1.rx_buf[5]<<8|can1.rx_buf[6];
+    //
+    //     float Motor_Angle;
+    //     if (can1.rx_buf[2] == 0x01) // 负数
+    //     {
+    //         Motor_Angle = -((float)Pos * 360.0f / 65535.0f);
+    //     }
+    //     else // 正数
+    //     {
+    //         Motor_Angle = ((float)Pos * 360.0f / 65535.0f);
+    //     }
+    //
+    //     float Joint_Angle = 0;
+    //
+    //     switch (can1.rx_buf[0])
+    //     {
+    //     case 0x01: Joint_Angle = Motor_Angle / 50; break;
+    //     case 0x02: Joint_Angle = Motor_Angle / 51; break;
+    //     case 0x03: Joint_Angle = Motor_Angle / 51; break;
+    //     case 0x04: Joint_Angle = Motor_Angle / 51; break;
+    //     case 0x05: Joint_Angle = Motor_Angle / 27; break;
+    //     case 0x06: Joint_Angle = Motor_Angle / 51; break;
+    //     default: break;
+    //     }
+    //
+    //     Current_Angle_Rad[i]=(Joint_Angle * PI / 180.0f) + DH_Params[can1.rx_buf[0]-1].theta;
+    //
+    //     can1.rx_flag=0;
+    // }
+}
+
+float* NewBee::Get_Current_Angle_Rad(void)
+{
+    return state.Current_Angle_Rad;
+}
+
+void NewBee::UpDate_S_Curve_Profile(void)
+{
+    tp.S_Curve_Profile(state.Target_CP, state.Current_CP);
+}
+
+uint32_t NewBee::Get_Current_Step(void)
+{
+    return tp.Step;
+}
+
+void NewBee::UpDate_Target_CP(const Coordinates_Pose& target_cp)
+{
+    state.Target_CP=target_cp;
+}
+
+void NewBee::UpDate_Current_CP()
+{
+    state.Current_CP=fk.Forward_Kinematics(state.Current_Angle_Rad);
+}
+
